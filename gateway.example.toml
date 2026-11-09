@@ -75,6 +75,15 @@ key    = "env:ANTHROPIC_API_KEY"
 # [plugins.routing]
 # public_models = "routes"          # all | routes
 
+# Rotate only Command Code accounts whose rolling windows still have capacity.
+# [plugins.commandcode_quota]
+# poll_interval = "60s"
+# providers = [
+#   { name = "cc1", key = "env:CC1_KEY" },
+#   { name = "cc2", key = "env:CC2_KEY" },
+#   { name = "cc3", key = "env:CC3_KEY" },
+# ]
+
 # Fallback: Claude, then GPT, each tried twice.
 [routes.smart]
 to      = ["anthropic/claude-haiku-5-5", "openai/gpt-6-luna"]

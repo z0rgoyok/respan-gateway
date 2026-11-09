@@ -211,7 +211,7 @@ Everything the gateway does is a plugin on one public Rust API.
 
 **Your own plugin** · start from the [plugin guide](docs/plugins.md) or an [example](examples/README.md): guardrails, PII masking, billing, an LLM judge.
 
-<sub>Built in: [`routing`](crates/plugins/routing/README.md) · [`tool-loop`](crates/plugins/tool-loop/README.md) · [`mcp-router`](crates/plugins/mcp-router/README.md) · [`pricing`](crates/plugins/pricing/README.md) · [`respan`](crates/plugins/respan/README.md) · [`responses`](crates/plugins/responses/README.md) · [`credentials`](crates/plugins/credentials/README.md)</sub>
+<sub>Built in: [`routing`](crates/plugins/routing/README.md) · [`commandcode-quota`](crates/plugins/commandcode-quota/README.md) · [`tool-loop`](crates/plugins/tool-loop/README.md) · [`mcp-router`](crates/plugins/mcp-router/README.md) · [`pricing`](crates/plugins/pricing/README.md) · [`respan`](crates/plugins/respan/README.md) · [`responses`](crates/plugins/responses/README.md) · [`credentials`](crates/plugins/credentials/README.md)</sub>
 
 ## Community
 

@@ -7,6 +7,7 @@ write one, see the [plugin guide](../../docs/plugins.md).
 | Crate | Package | What it does |
 |---|---|---|
 | [`routing`](routing/README.md) | `respan-gateway-plugin-routing` | `Routing` targets each request at a provider by its model and a route's rules; `Dispatch` sends it to the route's candidates |
+| [`commandcode-quota`](commandcode-quota/README.md) | `respan-gateway-plugin-commandcode-quota` | `CommandCodeQuota` polls account windows and rotates available accounts before a route's other fallbacks |
 | `relay` | `respan-gateway-plugin-relay` | `Relay` marks a call to a provider of the client's own format `Relayed`: the client's key, the provider's response head and error body pass as they came |
 | [`fallback`](fallback/README.md) | `respan-gateway-plugin-fallback` | The retry, backoff and race helpers routing's `Dispatch` is built on |
 | [`tool-loop`](tool-loop/README.md) | `respan-gateway-plugin-tool-loop` | `ToolLoop` runs tools inside chat requests, for every chat format; `ToolFilter` and `ToolScope` say which tools are offered |

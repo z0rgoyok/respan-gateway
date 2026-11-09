@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::middleware::{from_fn_with_state, map_response};
@@ -13,6 +14,7 @@ use respan_gateway_http::http::StatusCode;
 use respan_gateway_http::http::header::CONTENT_TYPE;
 use respan_gateway_media::video::{LocateContent, VideoJobs};
 use respan_gateway_media_http::gemini::GeminiVeo;
+use respan_gateway_plugin_commandcode_quota::CommandCodeQuota;
 use respan_gateway_plugin_credentials::ClientCredentials;
 use respan_gateway_plugin_mcp_router::{Closer as McpCloser, McpRouter};
 use respan_gateway_plugin_relay::Relay;
@@ -106,9 +108,67 @@ impl Built {
             }
             None => gateway,
         };
+        let commandcode_quota = match &config.plugins.commandcode_quota {
+            Some(quota) => {
+                let providers = (quota.providers.iter())
+                    .map(|provider| {
+                        if !config.providers.contains_key(&provider.name) {
+                            return Err(Error::new(format!(
+                                "plugins: commandcode_quota: provider '{}' is not configured",
+                                provider.name
+                            )));
+                        }
+                        let key = crate::compose::secret(
+                            &format!(
+                                "plugins: commandcode_quota: providers.{}: key",
+                                provider.name
+                            ),
+                            &provider.key,
+                        )?;
+                        Ok(respan_gateway_plugin_commandcode_quota::Provider::new(
+                            &provider.name,
+                            key,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                let http = network.client("commandcode quota", |builder| {
+                    Ok(builder.timeout(Duration::from_secs(5)))
+                })?;
+                let plugin = CommandCodeQuota::new(
+                    quota
+                        .url
+                        .as_deref()
+                        .unwrap_or(respan_gateway_plugin_commandcode_quota::DEFAULT_URL),
+                    providers,
+                    quota
+                        .poll_interval
+                        .unwrap_or(respan_gateway_plugin_commandcode_quota::DEFAULT_INTERVAL),
+                    http,
+                )?;
+                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                    let log = config.log;
+                    runtime.spawn(
+                        plugin
+                            .worker()
+                            .run(process.stopping.subscribe(), move |message| {
+                                log.say(crate::logging::Level::Info, message)
+                            }),
+                    );
+                }
+                Some(plugin)
+            }
+            None => None,
+        };
         let fronted = aggregate.clone();
-        let (gateway, closer, aggregate) =
-            with_plugins(gateway, &config, aggregate, &plan, &formats, process);
+        let (gateway, closer, aggregate) = with_plugins(
+            gateway,
+            &config,
+            aggregate,
+            &plan,
+            &formats,
+            commandcode_quota,
+            process,
+        );
         let gateway = match respan_calls {
             Some(calls) => gateway.plugin(calls),
             None => gateway,
@@ -204,15 +264,17 @@ fn routing(plan: &Plan, formats: &[KnownFormat], tool_loop: bool) -> Routing {
 type Plugins = (Gateway, Option<tool_loop::Closer>, Option<McpCloser>);
 
 /// The gateway with the binary's plugins, in a fixed order whatever the
-/// config's: the request log, routing, MCP, video jobs, whose credentials go
-/// where, the tool loop, then the dispatch of routes. The vendors' quirks are
-/// none of them: they are in the formats their providers speak.
+/// config's: the request log, routing, Command Code quota, MCP, video jobs,
+/// whose credentials go where, the tool loop, then the dispatch of routes. The
+/// vendors' quirks are none of them: they are in the formats their providers
+/// speak.
 fn with_plugins(
     gateway: Gateway,
     config: &Config,
     aggregate: Option<Vec<String>>,
     plan: &Plan,
     formats: &[KnownFormat],
+    commandcode_quota: Option<CommandCodeQuota>,
     process: &Process,
 ) -> Plugins {
     let (log, switches) = (&process.log, &process.switches);
@@ -258,8 +320,12 @@ fn with_plugins(
     };
     let gateway = gateway
         .plugin(Recorder::new(log.clone(), formats, names.clone()))
-        .plugin(routing(plan, formats, tool_loop.is_some()))
-        .plugin(mcp_router);
+        .plugin(routing(plan, formats, tool_loop.is_some()));
+    let gateway = match commandcode_quota {
+        Some(quota) => gateway.plugin(quota),
+        None => gateway,
+    };
+    let gateway = gateway.plugin(mcp_router);
     let gateway = gateway.plugin(video_jobs(plan, formats)).plugin(locate);
     // A provider without a key of its own gets the client's.
     let keyless = plan.upstreams.iter().filter(|u| !u.own_key);

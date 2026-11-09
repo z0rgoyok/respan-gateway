@@ -187,6 +187,30 @@ pricing = { input = 1.0, output = 2.0, cached_input = 0.5 }   # $ per million to
 A request's cost is the sum over its calls, retries and tool-loop steps
 included. The request log and the UI show it.
 
+## Command Code quota
+
+Command Code exposes its plan and rolling windows through read-only endpoints
+used by `cmd /usage`. The optional `commandcode_quota` plugin polls those
+endpoints for the named providers and rotates available accounts before a
+route's other fallbacks. A provider that answers 429 leaves the rotation as
+soon as that call ends. Purchased credits keep a provider available after a
+rolling window is full because Command Code lets them bypass the window.
+
+```toml
+[plugins.commandcode_quota]
+poll_interval = "60s"               # optional
+providers = [
+  { name = "cc1", key = "env:CC1_KEY" },
+  { name = "cc2", key = "env:CC2_KEY" },
+  { name = "cc3", key = "env:CC3_KEY" },
+]
+```
+
+Each `name` must be a provider configured at the top level and used by a
+route. The plugin preserves unrelated route candidates as fallback. If the
+quota endpoint is temporarily unavailable, routing keeps its normal behavior;
+actual provider errors still trigger the configured retry and fallback.
+
 ## Conversation state
 
 A Responses client's `previous_response_id` works with every provider, not

@@ -44,9 +44,9 @@ pub use app::{App, DEFAULT_LISTEN, ReloadError, Reloaded, shutdown_signal};
 pub use auth::Trusted;
 pub use cli::{execute, run};
 pub use config::{
-    Auth, Commit, Config, DEFAULT_FILE, Pick, PluginsConfig, Price, ProviderConfig, ProxyVendor,
-    PublicModels, RequestLogConfig, RouteConfig, RouteTarget, RouteWhen, RoutingConfig, Source,
-    no_keys_message,
+    Auth, CommandCodeQuotaConfig, CommandCodeQuotaProviderConfig, Commit, Config, DEFAULT_FILE,
+    Pick, PluginsConfig, Price, ProviderConfig, ProxyVendor, PublicModels, RequestLogConfig,
+    RouteConfig, RouteTarget, RouteWhen, RoutingConfig, Source, no_keys_message,
 };
 pub use init::starter_config;
 pub use logging::LogFormat;
