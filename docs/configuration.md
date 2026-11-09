@@ -159,6 +159,13 @@ A request's model goes, in order, to:
    every 10 minutes);
 5. otherwise, the default provider for that kind of request.
 
+`GET /v1/models` publishes each provider's fetched list and every named
+route. Set `[plugins.routing] public_models = "routes"` to publish only the
+named, non-glob routes. Provider listings are still fetched for routing and
+pricing when `listings` is enabled; the setting changes the model endpoints,
+including their Anthropic and Gemini shapes, and `respan-gateway models`.
+The default is `all`.
+
 A route's `to` is a candidate or a list: `provider`, `provider/model`, or
 `provider/{model}`. `pick` orders the candidates: `first`, `cheapest`,
 `fastest`, `weighted` or `random`. `needs = ["tools"]` drops models that

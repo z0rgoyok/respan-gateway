@@ -1,8 +1,9 @@
-//! `GET /v1/models`: every provider's models in one OpenAI-shaped list,
+//! `GET /v1/models`: named routes and, by default, every provider's models,
 //! each named as a client asks for it: as it is if routing sends that name
 //! to its provider, else as `provider/model`. `GET /v1beta/models` is the
 //! same list in Gemini's shape, for Gemini SDKs; a request to `/v1/models`
-//! with `anthropic-version` gets Anthropic's shape.
+//! with `anthropic-version` gets Anthropic's shape. A config may publish its
+//! named routes alone, while still reading provider lists for routing.
 
 use parking_lot::Mutex;
 use std::sync::{Arc, Weak};
@@ -19,6 +20,7 @@ use serde_json::{Value, json};
 
 use crate::auth;
 use crate::compose::Upstream;
+use crate::config::PublicModels;
 use crate::formats::{first_of_each_kind, kind};
 use crate::requests::rfc3339;
 use respan_gateway_plugin_routing::Routes;
@@ -69,13 +71,14 @@ pub struct Probe {
 pub struct Models {
     listings: Vec<Listing>,
     routes: Arc<Routes>,
+    public_models: PublicModels,
     cached: Mutex<Option<(Instant, Value)>>,
     /// Whether every provider has answered its first listing, or failed to.
     listed: tokio::sync::watch::Sender<bool>,
 }
 
 impl Models {
-    pub fn new(upstreams: &[Upstream], routes: Arc<Routes>) -> Self {
+    pub fn new(upstreams: &[Upstream], routes: Arc<Routes>, public_models: PublicModels) -> Self {
         let listings = upstreams.iter().map(|u| Listing {
             provider: u.name.clone(),
             source: u.provider.clone(),
@@ -85,6 +88,7 @@ impl Models {
         Self {
             listings: listings.collect(),
             routes,
+            public_models,
             cached: Mutex::default(),
             listed: tokio::sync::watch::channel(false).0,
         }
@@ -108,7 +112,7 @@ impl Models {
         runtime.spawn(async move {
             loop {
                 let Some(held) = models.upgrade() else { return };
-                let _ = held.collect().await;
+                let _ = held.fetch_all().await;
                 held.listed.send_replace(true);
                 drop(held);
                 tokio::time::sleep(every).await;
@@ -116,8 +120,8 @@ impl Models {
         });
     }
 
-    /// The merged list, fetched again once a minute old; not kept while a
-    /// provider fails to list. `Err` says why, when every provider failed.
+    /// The list clients see, fetched again once a minute old; not kept while
+    /// a provider fails to list. `Err` says why, when every provider failed.
     pub async fn list(&self) -> Result<Value, String> {
         let fresh = |at: &Instant| at.elapsed() < FRESH;
         if let Some((_, list)) = self.lock().as_ref().filter(|(at, _)| fresh(at)) {
@@ -137,14 +141,35 @@ impl Models {
         Ok(list)
     }
 
-    /// Every provider's models now, and why each provider that did not
-    /// list is missing.
+    /// The models clients see now, and why each provider that did not list
+    /// is missing. Named routes alone are returned without asking providers
+    /// when `public_models` is `routes`.
     pub async fn collect(&self) -> (Vec<Value>, Vec<String>) {
+        if self.public_models == PublicModels::Routes {
+            return (self.routes().collect(), Vec::new());
+        }
+        let (listed, failed) = self.fetch_all().await;
+        (self.publish(listed), failed)
+    }
+
+    /// Every provider's models now, and why each provider that did not
+    /// list is missing. The routing catalog is updated as a side effect.
+    async fn fetch_all(&self) -> (Vec<Value>, Vec<String>) {
         let fetched = join_all(self.listings.iter().map(|l| self.fetch(l))).await;
         let (listed, failed): (Vec<_>, Vec<_>) = fetched.into_iter().partition(Result::is_ok);
         let failed = failed.into_iter().filter_map(Result::err).collect();
         let listed = listed.into_iter().flatten().flatten();
-        (self.routes().chain(listed).collect(), failed)
+        (listed.collect(), failed)
+    }
+
+    /// The models clients see: named routes, followed by each provider's
+    /// list when `public_models` is `all`.
+    fn publish(&self, listed: Vec<Value>) -> Vec<Value> {
+        let routes = self.routes();
+        match self.public_models {
+            PublicModels::All => routes.chain(listed).collect(),
+            PublicModels::Routes => routes.collect(),
+        }
     }
 
     /// The routes named for one model, as models a client may ask for:
@@ -409,6 +434,7 @@ pub async fn get_gemini(State(models): State<Arc<Models>>, Path(model): Path<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use respan_gateway_plugin_routing::{Candidate, Rule};
 
     #[test]
     fn a_models_kind_is_read_from_its_name() {
@@ -439,5 +465,47 @@ mod tests {
         assert_eq!(kind("jev-latest"), "decision");
         assert_eq!(kind("span-02"), "decision");
         assert_eq!(kind("gpt-6-luna-decisions"), "decision");
+    }
+
+    fn configured_models(public_models: PublicModels) -> Models {
+        let routes = Routes::new()
+            .rule(Rule::new(
+                "configured",
+                vec![Candidate::parse("provider/upstream")],
+            ))
+            .rule(Rule::new(
+                "configured-*",
+                vec![Candidate::parse("provider/{model}")],
+            ));
+        Models::new(&[], Arc::new(routes), public_models)
+    }
+
+    #[tokio::test]
+    async fn routes_only_public_list_omits_provider_catalog_cards() {
+        let models = configured_models(PublicModels::Routes);
+        let listed = vec![json!({"id": "provider/raw", "kind": "chat"})];
+        let published = models.publish(listed);
+        let ids: Vec<&str> = published
+            .iter()
+            .filter_map(|model| model["id"].as_str())
+            .collect();
+
+        assert_eq!(ids, ["configured"]);
+        let (collected, failed) = models.collect().await;
+        assert_eq!(collected.len(), 1);
+        assert!(failed.is_empty());
+    }
+
+    #[test]
+    fn all_public_models_include_provider_catalog_cards() {
+        let models = configured_models(PublicModels::All);
+        let listed = vec![json!({"id": "provider/raw", "kind": "chat"})];
+        let published = models.publish(listed);
+        let ids: Vec<&str> = published
+            .iter()
+            .filter_map(|model| model["id"].as_str())
+            .collect();
+
+        assert_eq!(ids, ["configured", "provider/raw"]);
     }
 }

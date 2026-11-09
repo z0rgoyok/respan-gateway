@@ -1199,3 +1199,45 @@ async fn fireworks_answers_each_decision_contract_in_its_own() {
     }
     server.abort();
 }
+
+#[tokio::test]
+async fn routes_only_model_endpoint_publishes_exactly_the_named_routes() {
+    use tower::ServiceExt;
+
+    let routes: String = (0..16)
+        .map(|i| format!("[routes.\"route-{i:02}\"]\nto = \"upstream\"\n"))
+        .collect();
+    let text = format!(
+        "providers = {{ upstream = {{ formats = \"openai-chat\", base_url = \"http://127.0.0.1:9/v1\", auth = {{ type = \"bearer\", key = \"upstream-key\" }} }} }}\n\
+         formats = [\"openai-chat\"]\n\
+         client_keys = [{{ name = \"test\", key = \"client-key\" }}]\n\
+         plugins = {{ routing = {{ listings = false, public_models = \"routes\" }} }}\n\
+         {routes}\
+         [routes.\"route-*\"]\nto = \"upstream/{{model}}\"\n",
+    );
+    let app = App::new(Config::parse(&text).unwrap_or_else(|e| panic!("config: {e}")))
+        .unwrap_or_else(|e| panic!("app: {e}"));
+    let mut request = http::Request::get("/v1/models")
+        .body(Body::full(Bytes::new()))
+        .expect("request");
+    request.headers_mut().insert(
+        http::header::AUTHORIZATION,
+        "Bearer client-key".parse().expect("header"),
+    );
+    let response = app.router().oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("response body");
+    let body: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|model| model["id"].as_str())
+        .collect();
+
+    assert_eq!(ids.len(), 16);
+    assert!(ids.iter().all(|id| id.starts_with("route-")));
+    assert!(ids.iter().all(|id| !id.starts_with("upstream/")));
+}

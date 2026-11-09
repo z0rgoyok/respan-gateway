@@ -45,7 +45,8 @@ pub use auth::Trusted;
 pub use cli::{execute, run};
 pub use config::{
     Auth, Commit, Config, DEFAULT_FILE, Pick, PluginsConfig, Price, ProviderConfig, ProxyVendor,
-    RequestLogConfig, RouteConfig, RouteTarget, RouteWhen, RoutingConfig, Source, no_keys_message,
+    PublicModels, RequestLogConfig, RouteConfig, RouteTarget, RouteWhen, RoutingConfig, Source,
+    no_keys_message,
 };
 pub use init::starter_config;
 pub use logging::LogFormat;
