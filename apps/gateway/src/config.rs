@@ -341,10 +341,10 @@ pub enum Auth {
 }
 
 /// The compiled-in plugins. Each is configured under its own name, and the
-/// gateway registers them in a fixed order: the request log, routing, the
-/// MCP aggregate, video jobs, the tool loop, then the dispatch of routes. Video
-/// jobs are always on; a vendor's quirks are in the formats it speaks, not
-/// plugins.
+/// gateway registers them in a fixed order: the request log, routing, Command
+/// Code quota, the MCP aggregate, video jobs, the tool loop, then the dispatch
+/// of routes. Video jobs are always on; a vendor's quirks are in the formats it
+/// speaks, not plugins.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginsConfig {
@@ -369,9 +369,54 @@ pub struct PluginsConfig {
     pub responses: ResponsesConfig,
     /// Send each request to Respan as a trace; off if unset.
     pub respan: Option<RespanConfig>,
+    /// Keep route rotation on Command Code accounts that still have quota;
+    /// off if unset.
+    pub commandcode_quota: Option<CommandCodeQuotaConfig>,
     /// The request history the web UI and admin API read; always on.
     #[serde(default)]
     pub request_log: RequestLogConfig,
+}
+
+/// Command Code quota-aware rotation, for providers named in routes.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandCodeQuotaConfig {
+    /// Command Code's origin; `https://api.commandcode.ai` if unset.
+    pub url: Option<String>,
+    /// How long a successful quota read stays fresh; 60 seconds if unset.
+    #[serde(default, deserialize_with = "span")]
+    pub poll_interval: Option<Duration>,
+    /// Command Code providers and their keys, matched to top-level providers
+    /// by `name`.
+    pub providers: Vec<CommandCodeQuotaProviderConfig>,
+}
+
+impl std::fmt::Debug for CommandCodeQuotaConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandCodeQuotaConfig")
+            .field("url", &self.url.as_deref().map(crate::redact::url))
+            .field("poll_interval", &self.poll_interval)
+            .field("providers", &self.providers)
+            .finish()
+    }
+}
+
+/// One Command Code provider and the key used for its quota probe.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandCodeQuotaProviderConfig {
+    /// The name of a top-level provider and route candidate.
+    pub name: String,
+    /// Its Command Code API key, literal or `env:NAME`.
+    pub key: String,
+}
+
+impl std::fmt::Debug for CommandCodeQuotaProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandCodeQuotaProviderConfig")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Respan observability: each request a trace, sent to Respan.
@@ -1262,6 +1307,35 @@ vendor = "anthropic"
         assert_eq!(tool_loop.parallel, Some(2));
         assert_eq!(tool_loop.max_results, Some(64 << 10));
         assert!(config.cors.is_some_and(|c| c.origins.len() == 1));
+    }
+
+    #[test]
+    fn commandcode_quota_providers_parse_and_redact_keys() {
+        let config = Config::parse(
+            "plugins = { commandcode_quota = { poll_interval = \"45s\", providers = [\n\
+             { name = \"cc1\", key = \"env:CC1_KEY\" },\n\
+             { name = \"cc2\", key = \"sk-private-value\" }] } }\n",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let quota = config
+            .plugins
+            .commandcode_quota
+            .as_ref()
+            .unwrap_or_else(|| panic!("commandcode_quota"));
+        assert_eq!(quota.poll_interval, Some(Duration::from_secs(45)));
+        assert_eq!(quota.providers.len(), 2);
+        assert_eq!(quota.providers[0].name, "cc1");
+        assert_eq!(quota.providers[0].key, "env:CC1_KEY");
+        let shown = format!("{config:?}");
+        assert!(!shown.contains("sk-private-value"), "{shown}");
+
+        let said = Config::parse(
+            "plugins = { commandcode_quota = { providers = [{ name = \"cc1\", key = \"x\", extra = 1 }] } }\n",
+        )
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+        assert!(said.contains("extra"), "{said}");
     }
 
     #[test]

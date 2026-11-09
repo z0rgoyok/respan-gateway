@@ -544,6 +544,7 @@ one:
   [`pricing`](../crates/plugins/pricing),
   [`respan`](../crates/plugins/respan),
   [`routing`](../crates/plugins/routing),
+  [`commandcode-quota`](../crates/plugins/commandcode-quota),
   [`tool-loop`](../crates/plugins/tool-loop).
 - [`examples/`](../examples/README.md), runnable: guardrails, PII
   redaction across streams, billing and wallets, admission control, durable

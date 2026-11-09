@@ -1605,6 +1605,7 @@ dependencies = [
  "respan-gateway-media",
  "respan-gateway-media-http",
  "respan-gateway-passthrough-http",
+ "respan-gateway-plugin-commandcode-quota",
  "respan-gateway-plugin-credentials",
  "respan-gateway-plugin-fallback",
  "respan-gateway-plugin-mcp-router",
@@ -1848,6 +1849,26 @@ dependencies = [
  "respan-gateway-core",
  "respan-gateway-http",
  "respan-gateway-http-faults",
+]
+
+[[package]]
+name = "respan-gateway-plugin-commandcode-quota"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "mockllm",
+ "parking_lot",
+ "reqwest",
+ "respan-gateway-conversation",
+ "respan-gateway-conversation-http",
+ "respan-gateway-core",
+ "respan-gateway-http",
+ "respan-gateway-http-faults",
+ "respan-gateway-http-transport",
+ "respan-gateway-plugin-routing",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

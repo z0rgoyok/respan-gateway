@@ -32,6 +32,7 @@ form_urlencoded.workspace = true
 respan-gateway-http-faults.workspace = true
 respan-gateway-plugin-relay.workspace = true
 respan-gateway-plugin-credentials.workspace = true
+respan-gateway-plugin-commandcode-quota.workspace = true
 respan-gateway-conversation.workspace = true
 respan-gateway-conversation-http.workspace = true
 respan-gateway-core.workspace = true
