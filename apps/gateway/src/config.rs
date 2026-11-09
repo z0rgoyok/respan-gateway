@@ -436,6 +436,21 @@ pub struct RoutingConfig {
     /// minutes, so a model one lists goes to it, and routes can pick by
     /// price and capability; true if unset.
     pub listings: Option<bool>,
+    /// Which models the model endpoints publish: every provider's list and
+    /// the named routes, or just the named routes; all if unset.
+    #[serde(default)]
+    pub public_models: PublicModels,
+}
+
+/// Which models `GET /v1/models` and `GET /v1beta/models` publish.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublicModels {
+    /// Every provider's list, plus each named route. The default.
+    #[default]
+    All,
+    /// Each named route, without the providers' raw model lists.
+    Routes,
 }
 
 /// One route: the candidates a model name goes to, and how they are
@@ -1251,7 +1266,7 @@ vendor = "anthropic"
 
     #[test]
     fn routes_parse_by_model_name() {
-        let text = "plugins = { routing = { default = \"openai\" } }\n\
+        let text = "plugins = { routing = { default = \"openai\", public_models = \"routes\" } }\n\
                     [routes.smart]\n\
                     to = [\"anthropic/claude\", { target = \"openai/gpt-5\", weight = 3 }]\n\
                     pick = \"weighted\"\n\
@@ -1265,6 +1280,7 @@ vendor = "anthropic"
                     hedge = \"300ms\"\n";
         let config = Config::parse(text).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(config.plugins.routing.default.as_deref(), Some("openai"));
+        assert_eq!(config.plugins.routing.public_models, PublicModels::Routes);
         let smart = &config.routes["smart"];
         assert_eq!(
             smart.to,
@@ -1289,6 +1305,15 @@ vendor = "anthropic"
         assert_eq!(llama.to[0].target, "groq");
         assert_eq!(llama.hedge, Some(Duration::from_millis(300)));
         assert_eq!(llama.pick, Pick::First);
+
+        let defaults = Config::parse("").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(defaults.plugins.routing.public_models, PublicModels::All);
+        let said = Config::parse("plugins = { routing = { public_models = \"catalog\" } }\n")
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(said.contains("public_models"), "{said}");
+
         let said = Config::parse("[routes.x]\nto = 3\n")
             .err()
             .map(|e| e.to_string())

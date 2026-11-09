@@ -365,7 +365,11 @@ fn routes(
     let mut listed = None;
     // A relay lets its vendor answer, with the client's credentials.
     if !config.relay {
-        let models = Arc::new(Models::new(&plan.upstreams, plan.routes.clone()));
+        let models = Arc::new(Models::new(
+            &plan.upstreams,
+            plan.routes.clone(),
+            config.plugins.routing.public_models,
+        ));
         // The router reads the listings: which provider lists a model, and
         // what it costs and can do. Learnt before a client lists.
         if config.plugins.routing.listings != Some(false) {

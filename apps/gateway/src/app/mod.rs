@@ -188,12 +188,16 @@ impl App {
         report::check(&built.config, &built.plan, &built.formats, built.listen())
     }
 
-    /// Every provider's models, as `/v1/models` lists them (`id`, `kind`,
-    /// `owned_by`), asking each provider now; and why each provider that did
-    /// not list is missing.
+    /// The models `/v1/models` lists (`id`, `kind`, `owned_by`), asking each
+    /// provider now unless only named routes are public; and why each provider
+    /// that did not list is missing.
     pub async fn models(&self) -> (Vec<Value>, Vec<String>) {
         let built = self.shared.current();
-        let models = Models::new(&built.plan.upstreams, built.plan.routes.clone());
+        let models = Models::new(
+            &built.plan.upstreams,
+            built.plan.routes.clone(),
+            built.config.plugins.routing.public_models,
+        );
         models.collect().await
     }
 
@@ -202,7 +206,11 @@ impl App {
     /// of them did.
     pub async fn probe(&self) -> (String, bool) {
         let built = self.shared.current();
-        let models = Models::new(&built.plan.upstreams, built.plan.routes.clone());
+        let models = Models::new(
+            &built.plan.upstreams,
+            built.plan.routes.clone(),
+            built.config.plugins.routing.public_models,
+        );
         let (providers, servers) = tokio::join!(models.probe(), mcp::probe(&built.plan.mcp));
         let probes: Vec<Probe> = providers.into_iter().chain(servers).collect();
         // Listing contacts the servers, so only here, never in `report`.

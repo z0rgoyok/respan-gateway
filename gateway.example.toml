@@ -70,6 +70,11 @@ key    = "env:ANTHROPIC_API_KEY"
 # goes to the provider that lists it. See where one goes:
 # GET /ui/api/routes/explain?model=smart
 
+# Publish only the named routes at GET /v1/models and /v1beta/models, while
+# provider listings still inform routing and pricing.
+# [plugins.routing]
+# public_models = "routes"          # all | routes
+
 # Fallback: Claude, then GPT, each tried twice.
 [routes.smart]
 to      = ["anthropic/claude-haiku-5-5", "openai/gpt-6-luna"]
