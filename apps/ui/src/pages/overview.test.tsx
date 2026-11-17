@@ -16,6 +16,22 @@ const overview: Overview = {
   config_path: "gateway.toml",
   history: 1000,
   totals: { requests: 200, errors: 10, in_flight: 2, input_tokens: 1500, output_tokens: 4200 },
+  commandcode_quota: [
+    {
+      name: "cc1",
+      available: true,
+      checked_at: new Date().toISOString(),
+      reset_at: null,
+      error: null,
+      quota: {
+        five_hour: { used: 2, cap: 10, reset_at: null },
+        weekly: { used: 4, cap: 20, reset_at: null },
+        monthly: { used: 5, cap: 25, reset_at: "2026-12-01T00:00:00Z" },
+        monthly_remaining: 20,
+        purchased_remaining: 0,
+      },
+    },
+  ],
 };
 
 const provider: Provider = {
@@ -64,6 +80,8 @@ describe("OverviewPage", () => {
     expect(screen.getByText("10 errors")).toBeInTheDocument();
     expect(screen.getByText("config: gateway.toml")).toBeInTheDocument();
     expect(await screen.findByText("1 configured")).toBeInTheDocument();
+    expect(await screen.findByText("Command Code quotas")).toBeInTheDocument();
+    expect(screen.getAllByText("80.0%", { exact: false })).toHaveLength(3);
     expect(screen.getAllByText("anthropic").length).toBeGreaterThan(0);
     expect(await screen.findByText("claude-sonnet-4-5")).toBeInTheDocument();
   });

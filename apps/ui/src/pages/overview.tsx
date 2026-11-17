@@ -6,6 +6,7 @@ import {
   ArrowUpFromLine,
   Clock,
   DollarSign,
+  Gauge,
   Loader,
 } from "lucide-react";
 import { Link } from "react-router";
@@ -21,7 +22,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOverview, useProviders } from "@/hooks/queries";
 import { useRequests } from "@/hooks/use-live-requests";
-import { formatCost, formatCount, formatMs, formatPercent, formatUptime } from "@/lib/format";
+import { formatCost, formatCount, formatDateTime, formatMs, formatPercent, formatUptime } from "@/lib/format";
+import type { CommandCodeQuotaStatus, QuotaWindow } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { describeError } from "@/lib/query-client";
 
@@ -106,6 +108,64 @@ function ProvidersSummary() {
   );
 }
 
+function QuotaWindowRow({ label, window }: { label: string; window: QuotaWindow | null }) {
+  const remaining = window?.used != null && window.cap != null && window.cap > 0
+    ? Math.max(0, Math.min(100, (1 - window.used / window.cap) * 100))
+    : null;
+  return (
+    <div className="grid grid-cols-[4.5rem_1fr_auto] items-center gap-2 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted" aria-label={`${label} remaining`}>
+        {remaining != null && <div className="h-full rounded-full bg-foreground/70" style={{ width: `${remaining}%` }} />}
+      </div>
+      <span className="tabular text-right">{remaining == null ? "—" : `${remaining.toFixed(1)}%`}</span>
+    </div>
+  );
+}
+
+function CommandCodeQuotas({ statuses }: { statuses: CommandCodeQuotaStatus[] }) {
+  return (
+    <Card className="gap-4">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div className="grid gap-1.5">
+          <CardTitle className="text-base">Command Code quotas</CardTitle>
+          <CardDescription>Remaining account capacity, refreshed by the gateway</CardDescription>
+        </div>
+        <Gauge className="size-4 text-muted-foreground" aria-hidden="true" />
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {statuses.map((status) => {
+          const quota = status.quota;
+          return (
+            <div key={status.name} className="grid gap-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium">{status.name}</span>
+                <span className={status.available ? "text-xs text-emerald-600 dark:text-emerald-400" : "text-xs text-destructive"}>
+                  {status.error ?? (status.available ? "available" : "exhausted")}
+                </span>
+              </div>
+              {quota ? (
+                <>
+                  <QuotaWindowRow label="5 hours" window={quota.five_hour} />
+                  <QuotaWindowRow label="Weekly" window={quota.weekly} />
+                  <QuotaWindowRow label="Monthly" window={quota.monthly} />
+                  <div className="flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
+                    <span>Monthly credits {quota.monthly_remaining.toFixed(2)}</span>
+                    {quota.purchased_remaining > 0 && <span>Purchased {quota.purchased_remaining.toFixed(2)}</span>}
+                    {quota.monthly?.reset_at && <span>Resets {formatDateTime(quota.monthly.reset_at)}</span>}
+                  </div>
+                </>
+              ) : (
+                <span className="text-xs text-muted-foreground">Waiting for the first quota check…</span>
+              )}
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
 function RecentRequests() {
   const { data, isPending } = useRequests();
   if (data?.length === 0) return <NoRequests />;
@@ -153,6 +213,7 @@ export function OverviewPage() {
       />
       <Stats />
       {data?.respan && <RespanStatus health={data.respan} />}
+      {data?.commandcode_quota?.length ? <CommandCodeQuotas statuses={data.commandcode_quota} /> : null}
       <div className="grid gap-4 lg:grid-cols-3">
         <TrafficChart className="lg:col-span-2" />
         <ProvidersSummary />

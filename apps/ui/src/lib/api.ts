@@ -42,6 +42,31 @@ export interface Overview {
   history: number;
   /** How sending traces to Respan goes; null without its plugin. */
   respan?: RespanHealth | null;
+  /** Current non-secret Command Code account quotas, when enabled. */
+  commandcode_quota?: CommandCodeQuotaStatus[] | null;
+}
+
+export interface QuotaWindow {
+  used: number | null;
+  cap: number | null;
+  reset_at: string | null;
+}
+
+export interface CommandCodeQuota {
+  five_hour: QuotaWindow | null;
+  weekly: QuotaWindow | null;
+  monthly: QuotaWindow | null;
+  monthly_remaining: number;
+  purchased_remaining: number;
+}
+
+export interface CommandCodeQuotaStatus {
+  name: string;
+  available: boolean;
+  checked_at: string | null;
+  reset_at: string | null;
+  quota: CommandCodeQuota | null;
+  error: string | null;
 }
 
 /** The Respan plugin's record of sending traces. */

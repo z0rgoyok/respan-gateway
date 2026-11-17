@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::DateTime;
 use http::StatusCode;
 use parking_lot::RwLock;
 use reqwest::{Client, Url};
@@ -66,7 +67,10 @@ enum Availability {
 struct Probe {
     availability: Availability,
     checked: Option<Instant>,
+    checked_at: Option<SystemTime>,
+    org_id: Option<String>,
     reset_at: Option<SystemTime>,
+    quota: Option<Quota>,
     error: Option<String>,
 }
 
@@ -75,7 +79,10 @@ impl Default for Probe {
         Self {
             availability: Availability::Unknown,
             checked: None,
+            checked_at: None,
+            org_id: None,
             reset_at: None,
+            quota: None,
             error: None,
         }
     }
@@ -186,7 +193,9 @@ impl CommandCodeQuota {
                 ProviderStatus {
                     name: provider.name.clone(),
                     available: self.available(&probe, SystemTime::now()),
+                    checked_at: probe.checked_at,
                     reset_at: probe.reset_at,
+                    quota: probe.quota,
                     error: probe.error,
                 }
             })
@@ -227,14 +236,18 @@ impl CommandCodeQuota {
 }
 
 /// The safe current state of one configured Command Code provider.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ProviderStatus {
     /// Its provider name in routes.
     pub name: String,
     /// Whether it can be selected now.
     pub available: bool,
+    /// When the latest successful credits check completed.
+    pub checked_at: Option<SystemTime>,
     /// When an exhausted rolling window resets, when known.
     pub reset_at: Option<SystemTime>,
+    /// The latest rolling-window and credit values returned by Command Code.
+    pub quota: Option<Quota>,
     /// Why the last probe failed.
     pub error: Option<String>,
 }
@@ -256,10 +269,17 @@ impl Worker {
             };
             let interval = inner.interval;
             let changes = inner.refresh().await;
-            drop(inner);
             for change in changes {
                 notice(&change);
             }
+            join_all(
+                inner
+                    .providers
+                    .iter()
+                    .map(|provider| inner.refresh_month(provider)),
+            )
+            .await;
+            drop(inner);
             tokio::select! {
                 () = tokio::time::sleep(interval) => {}
                 changed = stopping.changed() => {
@@ -312,12 +332,28 @@ impl Inner {
 
     async fn probe(&self, provider: &Provider) -> Probe {
         match self.probe_inner(provider).await {
-            Ok((availability, reset_at)) => Probe {
-                availability,
-                checked: Some(Instant::now()),
-                reset_at,
-                error: None,
-            },
+            Ok((value, org_id)) => {
+                let now = SystemTime::now();
+                let (availability, reset_at) = value.availability(now);
+                let mut quota = value.details();
+                if let Some(previous) = self.state.read().get(&provider.name)
+                    && previous.org_id == org_id
+                {
+                    quota.monthly = previous
+                        .quota
+                        .as_ref()
+                        .and_then(|quota| quota.monthly.clone());
+                }
+                Probe {
+                    availability,
+                    checked: Some(Instant::now()),
+                    checked_at: Some(now),
+                    org_id,
+                    reset_at,
+                    quota: Some(quota),
+                    error: None,
+                }
+            }
             Err(error) => {
                 let mut previous = self
                     .state
@@ -335,7 +371,7 @@ impl Inner {
     async fn probe_inner(
         &self,
         provider: &Provider,
-    ) -> std::result::Result<(Availability, Option<SystemTime>), String> {
+    ) -> std::result::Result<(CreditsResponse, Option<String>), String> {
         let who = self.get("/alpha/whoami?limits=1", &provider.key).await?;
         let org_id = who
             .get("org")
@@ -346,40 +382,67 @@ impl Inner {
                 serde_json::Value::Number(value) => Some(value.to_string()),
                 _ => None,
             });
-        let credits_url = match org_id {
-            Some(org_id) => {
-                let mut url = self.endpoint("/alpha/billing/credits")?;
-                url.query_pairs_mut().append_pair("orgId", &org_id);
-                url
-            }
-            None => self.endpoint("/alpha/billing/credits")?,
-        };
-        let response = self
-            .http
-            .get(credits_url)
-            .bearer_auth(&provider.key)
-            .header("Accept", "application/json")
-            .header("User-Agent", "respan-gateway-commandcode-quota/1")
-            .send()
-            .await
-            .map_err(|error| safe_http_error(&error))?;
-        let status = response.status();
-        let body = response
-            .bytes()
-            .await
-            .map_err(|error| safe_http_error(&error))?;
-        if !status.is_success() {
-            return Err(format!("HTTP {}", status.as_u16()));
-        }
-        let value: CreditsResponse = serde_json::from_slice(&body)
-            .map_err(|_| "quota endpoint returned an unexpected response".to_owned())?;
-        Ok(value.availability(SystemTime::now()))
+        let credits_url = self.with_org("/alpha/billing/credits", org_id.as_deref())?;
+        let value: CreditsResponse =
+            self.get_value(credits_url, &provider.key)
+                .await
+                .and_then(|value| {
+                    serde_json::from_value(value)
+                        .map_err(|_| "quota endpoint returned an unexpected response".to_owned())
+                })?;
+        Ok((value, org_id))
     }
 
-    async fn get(&self, path: &str, key: &str) -> std::result::Result<serde_json::Value, String> {
+    async fn refresh_month(&self, provider: &Provider) {
+        let (checked_at, org_id) = {
+            let state = self.state.read();
+            let Some(probe) = state
+                .get(&provider.name)
+                .filter(|probe| probe.error.is_none() && probe.quota.is_some())
+            else {
+                return;
+            };
+            (probe.checked_at, probe.org_id.clone())
+        };
+        let (Ok(subscription), Ok(usage)) = (
+            self.with_org("/alpha/billing/subscriptions", org_id.as_deref()),
+            self.with_org("/alpha/usage/summary", org_id.as_deref()),
+        ) else {
+            return;
+        };
+        let (subscription, usage) = respan_gateway_core::futures::future::join(
+            self.get_value(subscription, &provider.key),
+            self.get_value(usage, &provider.key),
+        )
+        .await;
+        if let Some(probe) = self.state.write().get_mut(&provider.name)
+            && probe.checked_at == checked_at
+            && let Some(quota) = &mut probe.quota
+        {
+            quota.monthly = monthly_window(
+                quota.monthly_remaining,
+                subscription.ok().as_ref(),
+                usage.ok().as_ref(),
+            );
+        }
+    }
+
+    fn with_org(&self, path: &str, org_id: Option<&str>) -> std::result::Result<Url, String> {
+        let mut url = self.endpoint(path)?;
+        if let Some(org_id) = org_id {
+            url.query_pairs_mut().append_pair("orgId", org_id);
+        }
+        Ok(url)
+    }
+
+    async fn get_value(
+        &self,
+        url: Url,
+        key: &str,
+    ) -> std::result::Result<serde_json::Value, String> {
         let response = self
             .http
-            .get(self.endpoint(path)?)
+            .get(url)
             .bearer_auth(key)
             .header("Accept", "application/json")
             .header("User-Agent", "respan-gateway-commandcode-quota/1")
@@ -396,6 +459,10 @@ impl Inner {
         }
         serde_json::from_slice(&body)
             .map_err(|_| "quota endpoint returned an unexpected response".to_owned())
+    }
+
+    async fn get(&self, path: &str, key: &str) -> std::result::Result<serde_json::Value, String> {
+        self.get_value(self.endpoint(path)?, key).await
     }
 
     fn endpoint(&self, path: &str) -> std::result::Result<Url, String> {
@@ -579,6 +646,71 @@ impl CreditsResponse {
             (Availability::Exhausted, reset_at)
         }
     }
+
+    fn details(&self) -> Quota {
+        Quota {
+            five_hour: self.window_limits.five_hour.as_ref().map(Window::quota),
+            weekly: self.window_limits.weekly.as_ref().map(Window::quota),
+            monthly: None,
+            monthly_remaining: self.credits.monthly_credits,
+            purchased_remaining: self.credits.purchased_credits,
+        }
+    }
+}
+
+fn monthly_window(
+    remaining: f64,
+    subscription: Option<&serde_json::Value>,
+    usage: Option<&serde_json::Value>,
+) -> Option<QuotaWindow> {
+    let used = usage?.get("totalMonthlyCredits")?.as_f64()?;
+    let reset_at = subscription
+        .and_then(|value| value.get("data"))
+        .and_then(|value| value.get("currentPeriodEnd"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(SystemTime::from);
+    Some(QuotaWindow {
+        used: Some(used),
+        cap: Some(used + remaining),
+        reset_at,
+    })
+}
+
+/// A rolling or billing window returned by Command Code.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuotaWindow {
+    /// Credits consumed in the window, when the API reports it.
+    pub used: Option<f64>,
+    /// Credits available in the window, when the API reports it.
+    pub cap: Option<f64>,
+    /// When the window resets, when known.
+    pub reset_at: Option<SystemTime>,
+}
+
+impl Window {
+    fn quota(&self) -> QuotaWindow {
+        QuotaWindow {
+            used: self.used,
+            cap: self.cap,
+            reset_at: self.reset_at.and_then(unix_ms),
+        }
+    }
+}
+
+/// The latest non-secret quota data for one Command Code account.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Quota {
+    /// The five-hour rolling window.
+    pub five_hour: Option<QuotaWindow>,
+    /// The weekly rolling window.
+    pub weekly: Option<QuotaWindow>,
+    /// The current billing month.
+    pub monthly: Option<QuotaWindow>,
+    /// Credits remaining in the current month.
+    pub monthly_remaining: f64,
+    /// Purchased credits remaining.
+    pub purchased_remaining: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -606,6 +738,10 @@ struct WindowLimits {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Window {
+    #[serde(default)]
+    used: Option<f64>,
+    #[serde(default)]
+    cap: Option<f64>,
     reset_at: Option<u64>,
 }
 
@@ -706,6 +842,32 @@ mod tests {
         assert_eq!(
             value.availability(SystemTime::now()).0,
             Availability::Exhausted
+        );
+    }
+
+    #[test]
+    fn quota_details_keep_windows_and_monthly_reset() {
+        let value: CreditsResponse = serde_json::from_value(serde_json::json!({
+            "credits": {"monthlyCredits": 12.5, "purchasedCredits": 1.25, "freeCredits": 0.5},
+            "windowLimits": {
+                "exceeded": null,
+                "fiveHour": {"used": 2.0, "cap": 10.0, "resetAt": 1900000000000_u64},
+                "weekly": {"used": 4.0, "cap": 20.0, "resetAt": 1900000000000_u64}
+            }
+        }))
+        .unwrap_or_else(|error| panic!("{error}"));
+        let quota = value.details();
+        let monthly = monthly_window(
+            quota.monthly_remaining,
+            Some(&serde_json::json!({"data": {"currentPeriodEnd": "2030-01-02T03:04:05.000Z"}})),
+            Some(&serde_json::json!({"totalMonthlyCredits": 7.5})),
+        )
+        .expect("monthly usage");
+        assert_eq!(quota.five_hour.as_ref().and_then(|w| w.cap), Some(10.0));
+        assert_eq!(monthly.cap, Some(20.0));
+        assert_eq!(
+            monthly.reset_at,
+            Some(UNIX_EPOCH + Duration::from_secs(1_893_553_445))
         );
     }
 
@@ -816,6 +978,7 @@ mod tests {
                     checked,
                     reset_at: Some(SystemTime::now() + Duration::from_secs(3600)),
                     error: None,
+                    ..Probe::default()
                 },
             );
             state.insert(
@@ -825,6 +988,7 @@ mod tests {
                     checked,
                     reset_at: None,
                     error: None,
+                    ..Probe::default()
                 },
             );
         }

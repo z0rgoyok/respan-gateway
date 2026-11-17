@@ -160,6 +160,7 @@ impl Built {
             None => None,
         };
         let fronted = aggregate.clone();
+        let commandcode_quota_for_admin = commandcode_quota.clone();
         let (gateway, closer, aggregate) = with_plugins(
             gateway,
             &config,
@@ -193,7 +194,8 @@ impl Built {
                 gateway.clone(),
                 fronted,
             )
-            .respan(respan_health),
+            .respan(respan_health)
+            .commandcode_quota(commandcode_quota_for_admin),
         );
         let cors = match &config.cors {
             Some(c) => Some(Cors::new(&c.origins, keys.required()).map_err(Error::new)?),

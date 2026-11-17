@@ -69,6 +69,7 @@ pub struct Admin {
     tools: moka::sync::Cache<String, Value>,
     /// How sending traces to Respan goes, if its plugin is on.
     respan: Option<Arc<respan_gateway_plugin_respan::Health>>,
+    commandcode_quota: Option<respan_gateway_plugin_commandcode_quota::CommandCodeQuota>,
 }
 
 impl Admin {
@@ -157,6 +158,7 @@ impl Admin {
                 .time_to_live(Duration::from_secs(60))
                 .build(),
             respan: None,
+            commandcode_quota: None,
         }
     }
 
@@ -166,6 +168,15 @@ impl Admin {
         health: Option<Arc<respan_gateway_plugin_respan::Health>>,
     ) -> Self {
         self.respan = health;
+        self
+    }
+
+    /// With the Command Code quota plugin, to show in the overview.
+    pub(crate) fn commandcode_quota(
+        mut self,
+        quota: Option<respan_gateway_plugin_commandcode_quota::CommandCodeQuota>,
+    ) -> Self {
+        self.commandcode_quota = quota;
         self
     }
 }
@@ -278,7 +289,41 @@ async fn overview(State(admin): State<Arc<Admin>>) -> Json<Value> {
         "totals": process.log.totals(),
         "history": process.log.capacity(),
         "respan": admin.respan.as_ref().map(|h| respan_json(&h.report())),
+        "commandcode_quota": admin.commandcode_quota.as_ref().map(|quota| {
+            quota.statuses().into_iter().map(commandcode_status_json).collect::<Vec<_>>()
+        }),
     }))
+}
+
+fn commandcode_status_json(
+    status: respan_gateway_plugin_commandcode_quota::ProviderStatus,
+) -> Value {
+    let window = |window: Option<respan_gateway_plugin_commandcode_quota::QuotaWindow>| {
+        window.map(|window| {
+            json!({
+                "used": window.used,
+                "cap": window.cap,
+                "reset_at": window.reset_at.map(rfc3339),
+            })
+        })
+    };
+    let quota = status.quota.as_ref().map(|quota| {
+        json!({
+            "five_hour": window(quota.five_hour.clone()),
+            "weekly": window(quota.weekly.clone()),
+            "monthly": window(quota.monthly.clone()),
+            "monthly_remaining": quota.monthly_remaining,
+            "purchased_remaining": quota.purchased_remaining,
+        })
+    });
+    json!({
+        "name": status.name,
+        "available": status.available,
+        "checked_at": status.checked_at.map(rfc3339),
+        "reset_at": status.reset_at.map(rfc3339),
+        "quota": quota,
+        "error": status.error,
+    })
 }
 
 /// How sending traces to Respan goes: spans `sent`, `rejected` and

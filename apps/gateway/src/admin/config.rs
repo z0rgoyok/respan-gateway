@@ -25,6 +25,7 @@ fn is_secret(path: &[String], value: &Value) -> bool {
         ["client_keys", _, "key"]
         | ["providers", _, "key"]
         | ["plugins", "respan", "key"]
+        | ["plugins", "commandcode_quota", "providers", _, "key"]
         | ["providers", _, "auth", "key"]
         | ["tools", _, "headers", _]
         | ["tools", _, "auth", "bearer"]
@@ -43,7 +44,7 @@ fn is_secret(path: &[String], value: &Value) -> bool {
         | ["network", "proxy"]
         | ["providers" | "tools", _, "proxy"]
         | ["tools", _, "auth", "oauth", "token_url"]
-        | ["plugins", "respan", "url"]
+        | ["plugins", "respan" | "commandcode_quota", "url"]
         | ["providers", _, "base_url"]
         | ["providers", _, "formats", _] => value
             .as_str()
@@ -215,7 +216,7 @@ mod tests {
         assert_eq!(shown["tools"]["t"]["proxy"], "http://p:1");
     }
 
-    const FULL: &str = "client_keys = [\"gw-secret\", \"env:GATEWAY_KEY\", { name = \"app\", key = \"named-secret\" }]\nproviders = { a = { vendor = \"openai\", key = \"sk-live-1\" }, b = { formats = \"openai-chat\", base_url = \"http://b.test\", auth = { type = \"bearer\", key = \"sk-live-2\" } }, c = { vendor = \"groq\", key = \"env:GROQ_API_KEY\" } }\ntools = { m = { command = \"npx\", args = [\"-y\", \"server\", \"--token\", \"tok-1\"], env = { TOKEN = \"tok-2\", FROM_ENV = \"env:X\" } }, h = { url = \"https://h.test/mcp/\", auth = { bearer = \"tok-3\" } }, t = { url = \"https://t.test/mcp/abcdef0123456789abcdef0123\" }, q = { url = \"https://q.test/mcp?token=zzz\", headers = { x-k = \"tok-4\", x-from = \"env:Y\" } }, o = { url = \"https://o.test/mcp\", auth = { oauth = { token_url = \"https://o.test/token\", client_id = \"cid\", client_secret = \"oauth-secret\", refresh_token = \"oauth-refresh\" } } }, f = { url = \"https://f.test/mcp\", auth = \"forward\" }, s = { vendor = \"linkup\", key = \"lk-secret\" }, e = { vendor = \"linkup\", key = \"env:LK\" } }\n";
+    const FULL: &str = "client_keys = [\"gw-secret\", \"env:GATEWAY_KEY\", { name = \"app\", key = \"named-secret\" }]\nproviders = { a = { vendor = \"openai\", key = \"sk-live-1\" }, b = { formats = \"openai-chat\", base_url = \"http://b.test\", auth = { type = \"bearer\", key = \"sk-live-2\" } }, c = { vendor = \"groq\", key = \"env:GROQ_API_KEY\" } }\ntools = { m = { command = \"npx\", args = [\"-y\", \"server\", \"--token\", \"tok-1\"], env = { TOKEN = \"tok-2\", FROM_ENV = \"env:X\" } }, h = { url = \"https://h.test/mcp/\", auth = { bearer = \"tok-3\" } }, t = { url = \"https://t.test/mcp/abcdef0123456789abcdef0123\" }, q = { url = \"https://q.test/mcp?token=zzz\", headers = { x-k = \"tok-4\", x-from = \"env:Y\" } }, o = { url = \"https://o.test/mcp\", auth = { oauth = { token_url = \"https://o.test/token\", client_id = \"cid\", client_secret = \"oauth-secret\", refresh_token = \"oauth-refresh\" } } }, f = { url = \"https://f.test/mcp\", auth = \"forward\" }, s = { vendor = \"linkup\", key = \"lk-secret\" }, e = { vendor = \"linkup\", key = \"env:LK\" } }\nplugins = { commandcode_quota = { providers = [{ name = \"account\", key = \"quota-fixture-secret\" }] } }\n";
 
     #[test]
     fn redacts_every_kind_of_secret_and_keeps_references_and_the_rest() {
@@ -234,6 +235,7 @@ mod tests {
             "oauth-secret",
             "oauth-refresh",
             "lk-secret",
+            "quota-fixture-secret",
         ] {
             assert!(!shown.contains(secret), "{secret} in {shown}");
         }
@@ -253,7 +255,7 @@ mod tests {
         ] {
             assert!(shown.contains(kept), "{kept} missing in {shown}");
         }
-        assert_eq!(shown.matches(PLACEHOLDER).count(), 16, "{shown}");
+        assert_eq!(shown.matches(PLACEHOLDER).count(), 17, "{shown}");
         assert!(shown.contains("name = \"key-1\""), "{shown}");
     }
 }
