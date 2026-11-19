@@ -29,3 +29,8 @@ route keeps its normal behavior. A real provider 429 is handled immediately.
 Quota endpoints have an internal `/alpha` prefix in Command Code CLI `1.88.5`,
 so the plugin checks their contract at every poll and logs failures without
 stopping the gateway.
+
+The admin overview exposes the latest non-secret snapshot in
+`/ui/api/overview` under `commandcode_quota`. It includes the five-hour, weekly and
+monthly windows, remaining credits and check time. API keys and
+upstream response payloads are never returned to the UI.

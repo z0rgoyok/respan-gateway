@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+chrono.workspace = true
 http.workspace = true
 parking_lot.workspace = true
 reqwest.workspace = true

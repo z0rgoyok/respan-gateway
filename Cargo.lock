@@ -1855,6 +1855,7 @@ dependencies = [
 name = "respan-gateway-plugin-commandcode-quota"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "http",
  "mockllm",
  "parking_lot",
