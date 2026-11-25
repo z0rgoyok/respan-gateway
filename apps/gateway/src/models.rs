@@ -213,8 +213,9 @@ impl Models {
                     if !first["rate_card"].is_null() {
                         card["rate_card"] = first["rate_card"].clone();
                     }
+                } else {
+                    card["route"]["pricing_by_target"] = Value::Object(rates);
                 }
-                card["route"]["pricing_by_target"] = Value::Object(rates);
             }
             card
         })
@@ -537,10 +538,7 @@ mod tests {
             .set("provider", [upstream].into_iter());
         let card = models.routes().next().unwrap();
         assert_eq!(card["pricing"]["cached_input"], 0.1);
-        assert_eq!(
-            card["route"]["pricing_by_target"]["provider/upstream"]["pricing"],
-            card["pricing"]
-        );
+        assert!(card["route"].get("pricing_by_target").is_none());
     }
 
     #[test]
