@@ -29,12 +29,19 @@ pub async fn track(State(log): State<Arc<RequestLog>>, mut req: Request, next: N
     extensions.insert(Tracked(entry.clone()));
     req.extensions_mut().insert(extensions);
     let mut headless = Headless(Some((log.clone(), entry.clone())));
-    let resp = next.run(req).await;
+    let mut resp = next.run(req).await;
     headless.0 = None;
     let status = resp.status();
     let session = {
         let mut record = entry.record();
         record.status = Some(status.as_u16());
+        if record.client.is_some() && record.method == "POST" && status.is_success() {
+            let receipt = format!("{}~{}", record.id, record.started_at);
+            resp.headers_mut().insert(
+                "x-respan-usage-receipt",
+                receipt.parse().expect("gateway receipt"),
+            );
+        }
         let content_type = resp
             .headers()
             .get(CONTENT_TYPE)
@@ -186,4 +193,41 @@ mod tests {
             "no format served accepts GET /x"
         );
     }
+}
+
+/// A named client can read only its own finished request's metering fields.
+pub async fn receipt(
+    State(log): State<Arc<RequestLog>>,
+    axum::extract::Path(token): axum::extract::Path<String>,
+    req: Request,
+) -> Response {
+    use axum::response::IntoResponse;
+    use respan_gateway_http::http::StatusCode;
+    let client = req
+        .extensions()
+        .get::<Extensions>()
+        .and_then(|e| e.get::<crate::auth::KeyName>());
+    let Some((id, started)) = token.split_once('~') else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(r) = log.get(id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if client.is_none()
+        || r.client.as_deref() != client.map(|c| c.0.as_str())
+        || r.started_at != started
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if r.duration_ms.is_none() {
+        return StatusCode::ACCEPTED.into_response();
+    }
+    (
+        [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+        axum::Json(serde_json::json!({
+            "receipt":token, "provider":r.provider, "model":r.model, "rate_cards":r.rate_cards,
+            "cost_nano_usd":r.cost_usd.map(|usd| (usd * 1e9).round() as u64)
+        })),
+    )
+        .into_response()
 }

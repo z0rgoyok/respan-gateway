@@ -265,7 +265,12 @@ fn decode_whole(raw: Bytes, out: &mut Vec<Output>) -> Result<(), Fault> {
 /// The events of a usage object, if `u` is one.
 fn read_usage_into(u: &Value, out: &mut Vec<Output>) -> Result<(), Fault> {
     if u.is_object() {
-        let (usage, extras) = read_usage(u, &[])?;
+        let (mut usage, extras) = read_usage(u, &[])?;
+        // Images generations/edits return image output unless the endpoint supplies a breakdown.
+        usage.image_output_tokens = u
+            .pointer("/output_tokens_details/image_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(usage.output_tokens);
         out.push(Output::Usage(usage));
         out.extend(usage_extras(NAME, extras).map(Output::Native));
     }

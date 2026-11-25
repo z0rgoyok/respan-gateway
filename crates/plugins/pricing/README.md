@@ -31,3 +31,16 @@ It measures. What a host does with a charge, a budget or a wallet, is its
 own; see [the billing examples](../../../examples/README.md#billing-policies).
 The binary's catalog holds each provider's list with the config's declared
 `models` laid over it, and it adds each charge to the request's `cost_usd`.
+
+Named routes expose prices in `/v1/models` under
+`route.pricing_by_target` with `pricing_unit=USD_per_million_tokens`. Each
+target has its own price and optional operator-declared `rate_card` with
+`source`, `verified_on`, UTC off-peak periods, holidays, a long-prompt
+threshold, or a scheduled price change. Identical cards also appear on the
+route itself. A missing rate means the price is unknown.
+
+An authenticated successful model POST returns `x-respan-usage-receipt`.
+After consuming the response, use the same client credential to GET
+`/v1/usage/receipts/{token}`. The receipt includes the settled amount in
+integer nano-USD and the upstream rate cards used. A pending request returns
+202. Receipts are retained for the lifetime of the configured request history.

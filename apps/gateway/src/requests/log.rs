@@ -203,6 +203,7 @@ impl RequestLog {
             stream: false,
             usage: None,
             cost_usd: None,
+            rate_cards: Vec::new(),
             steps: Vec::new(),
             error: None,
         };
@@ -486,7 +487,15 @@ fn usd(cost: f64) -> String {
 /// `extensions`, as the pricing plugin charges it.
 pub fn charge(extensions: &Extensions, charge: &respan_gateway_plugin_pricing::Charge) {
     if let Some(Tracked(entry)) = extensions.get::<Tracked>() {
-        *entry.record().cost_usd.get_or_insert(0.0) += charge.usd;
+        let mut record = entry.record();
+        *record.cost_usd.get_or_insert(0.0) += charge.usd;
+        let card = serde_json::json!({
+            "provider":charge.provider, "model":charge.model, "pricing":charge.rates,
+            "source":charge.reference.as_ref().map(|r| &r.0), "verified_on":charge.reference.as_ref().map(|r| &r.1)
+        });
+        if record.rate_cards.len() < 32 && !record.rate_cards.contains(&card) {
+            record.rate_cards.push(card);
+        }
     }
 }
 
@@ -542,6 +551,7 @@ mod tests {
                 seconds: None,
             }),
             cost_usd: None,
+            rate_cards: Vec::new(),
             steps: Vec::new(),
             error: None,
         };

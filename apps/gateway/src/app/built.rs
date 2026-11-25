@@ -175,6 +175,9 @@ impl Built {
             None => gateway,
         };
         let keys = ClientKeys::new(plan.keys.clone());
+        let receipt = get(requests::receipt)
+            .with_state(process.log.clone())
+            .layer(from_fn_with_state(keys.clone(), auth::consume));
         let relay = relay(
             &gateway,
             &plan,
@@ -203,6 +206,7 @@ impl Built {
         };
         let local = (!keys.required())
             .then(|| LocalOnly::new(config.listen.unwrap_or(DEFAULT_LISTEN), cors.clone()));
+        let relay = relay.route("/v1/usage/receipts/{token}", receipt);
         let (router, listed) = routes(&config, &plan, relay, admin, keys, local.clone(), cors);
         Ok(Built {
             config: Arc::new(config),

@@ -34,6 +34,10 @@ pub struct Charge {
     pub provider: String,
     /// The model it was sent.
     pub model: String,
+    /// Effective per-million rates for this provider call.
+    pub rates: Price,
+    /// Official rate card used for the calculation, if declared.
+    pub reference: Option<(String, String)>,
     /// The tokens the report says were used; none for seconds of audio.
     pub usage: Usage,
     /// What that cost, in US dollars.
@@ -113,23 +117,44 @@ impl Plugin for Pricing {
         };
         let provider = px.provider().to_owned();
         let named = self.providers.get(&provider).unwrap_or(&provider);
-        let Some(price) = self.catalog.get(named, &model).and_then(|m| m.price) else {
+        let Some(card) = self.catalog.get(named, &model) else {
             return Ok(());
         };
+        let Some(price) = card.price else {
+            return Ok(());
+        };
+        let at = std::time::SystemTime::now();
+        let cumulative = std::sync::Mutex::new((Usage::default(), 0.0));
         let extensions = px.extensions().clone();
         on_usage(
             px,
             Arc::new(move |used| {
-                let (usage, usd) = match used {
-                    Used::Usage(usage) => (usage, charge(&price, &usage)),
+                let (usage, rates, usd) = match used {
+                    Used::Usage(usage) => {
+                        let mut prior = cumulative.lock().expect("usage accumulator");
+                        prior.0 += usage;
+                        let rates = card
+                            .rate_card
+                            .as_ref()
+                            .map_or(price, |c| c.rates(price, prior.0.input_tokens, at));
+                        let total = charge(&rates, &prior.0);
+                        let delta = total - prior.1;
+                        prior.1 = total;
+                        (usage, rates, delta)
+                    }
                     Used::Seconds(seconds) => match price.per_second {
-                        Some(rate) => (Usage::default(), seconds * rate),
+                        Some(rate) => (Usage::default(), price, seconds * rate),
                         None => return,
                     },
                 };
                 let charge = Charge {
                     provider: provider.clone(),
                     model: model.clone(),
+                    rates,
+                    reference: card
+                        .rate_card
+                        .as_ref()
+                        .map(|c| (c.source.clone(), c.verified_on.clone())),
                     usage,
                     usd,
                 };
@@ -229,10 +254,22 @@ pub fn charge(price: &Price, usage: &Usage) -> f64 {
     let cached = usage.cached_input_tokens.min(usage.input_tokens);
     let written = (usage.cache_write_input_tokens).min(usage.input_tokens - cached);
     let plain = usage.input_tokens - cached - written;
-    let dollars = plain as f64 * price.input
-        + cached as f64 * price.cached_input.unwrap_or(price.input)
+    let cached_audio = usage
+        .cached_audio_input_tokens
+        .min(cached)
+        .min(usage.audio_input_tokens);
+    let audio = (usage.audio_input_tokens - cached_audio).min(plain);
+    let images = usage.image_output_tokens.min(usage.output_tokens);
+    let dollars = (plain - audio) as f64 * price.input
+        + audio as f64 * price.audio_input.unwrap_or(price.input)
+        + cached_audio as f64
+            * price
+                .cached_audio_input
+                .unwrap_or(price.cached_input.unwrap_or(price.input))
+        + (cached - cached_audio) as f64 * price.cached_input.unwrap_or(price.input)
         + written as f64 * price.cache_write.unwrap_or(price.input)
-        + usage.output_tokens as f64 * price.output;
+        + (usage.output_tokens - images) as f64 * price.output
+        + images as f64 * price.image_output.unwrap_or(price.output);
     dollars / 1e6
 }
 

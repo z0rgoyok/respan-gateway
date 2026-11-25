@@ -180,13 +180,43 @@ impl Models {
             let first = rule.to.first().and_then(|c| c.model_for(Some(&rule.name)));
             let kind = kind_of(first.as_deref().unwrap_or(&rule.name));
             let to: Vec<String> = rule.to.iter().map(ToString::to_string).collect();
-            json!({
+            let mut card = json!({
                 "id": rule.name,
                 "object": "model",
                 "owned_by": "routes",
                 "kind": kind,
                 "route": { "pick": rule.pick.name(), "to": to },
-            })
+            });
+            let mut rates = serde_json::Map::new();
+            for target in &rule.to {
+                let Some(id) = target.model_for(Some(&rule.name)) else {
+                    continue;
+                };
+                if let Some(model) = self.routes.catalog().get(&target.provider, &id)
+                    && let Some(price) = model.price
+                {
+                    rates.insert(
+                        target.to_string(),
+                        json!({"pricing":price, "rate_card":model.rate_card}),
+                    );
+                }
+            }
+            if !rates.is_empty() {
+                card["pricing_unit"] = "USD_per_million_tokens".into();
+                if let Some(first) = rates.values().next()
+                    && rule
+                        .to
+                        .iter()
+                        .all(|c| rates.get(&c.to_string()) == Some(first))
+                {
+                    card["pricing"] = first["pricing"].clone();
+                    if !first["rate_card"].is_null() {
+                        card["rate_card"] = first["rate_card"].clone();
+                    }
+                }
+                card["route"]["pricing_by_target"] = Value::Object(rates);
+            }
+            card
         })
     }
 
@@ -494,6 +524,23 @@ mod tests {
         let (collected, failed) = models.collect().await;
         assert_eq!(collected.len(), 1);
         assert!(failed.is_empty());
+    }
+
+    #[test]
+    fn public_route_exposes_the_price_of_its_upstream_alias() {
+        let models = configured_models(PublicModels::Routes);
+        let mut upstream = Model::new("upstream");
+        upstream.price = Some(respan_gateway_sdk::Price::new(2.0, 10.0, Some(0.1)));
+        models
+            .routes
+            .catalog()
+            .set("provider", [upstream].into_iter());
+        let card = models.routes().next().unwrap();
+        assert_eq!(card["pricing"]["cached_input"], 0.1);
+        assert_eq!(
+            card["route"]["pricing_by_target"]["provider/upstream"]["pricing"],
+            card["pricing"]
+        );
     }
 
     #[test]

@@ -1241,3 +1241,74 @@ async fn routes_only_model_endpoint_publishes_exactly_the_named_routes() {
     assert!(ids.iter().all(|id| id.starts_with("route-")));
     assert!(ids.iter().all(|id| !id.starts_with("upstream/")));
 }
+
+#[tokio::test]
+async fn priced_route_issues_a_receipt_for_the_calling_client() {
+    use axum::{Json, Router, routing::post};
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let upstream = Router::new().route("/v1/chat/completions", post(|| async {
+        Json(json!({"id":"test","object":"chat.completion","created":1,"model":"upstream",
+        "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+        "usage":{"prompt_tokens":55635,"prompt_tokens_details":{"cached_tokens":55424},"completion_tokens":726}}))
+    }));
+    let server = tokio::spawn(axum::serve(listener, upstream).into_future());
+    let config = format!(
+        r#"
+formats = ["openai-chat"]
+client_keys = [{{name="a",key="client-a"}},{{name="b",key="client-b"}}]
+[providers.test]
+formats=["openai-chat"]
+base_url="http://{addr}/v1"
+auth={{type="bearer",key="provider"}}
+[plugins.routing]
+listings=false
+public_models="routes"
+[routes.public]
+to="test/upstream"
+[models."test/upstream"]
+pricing={{input=0.15,output=0.60,cached_input=0.003}}
+"#
+    );
+    let app = App::new(Config::parse(&config).unwrap()).unwrap();
+    let request = http::Request::post("/v1/chat/completions")
+        .header("authorization", "Bearer client-a")
+        .header("content-type", "application/json")
+        .body(Body::full(Bytes::from_static(
+            br#"{"model":"public","messages":[{"role":"user","content":"hi"}]}"#,
+        )))
+        .unwrap();
+    let answer = app.router().oneshot(request).await.unwrap();
+    assert_eq!(answer.status(), StatusCode::OK);
+    let token = answer.headers()["x-respan-usage-receipt"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    axum::body::to_bytes(answer.into_body(), 65536)
+        .await
+        .unwrap();
+    for (caller, expected) in [
+        ("client-b", StatusCode::NOT_FOUND),
+        ("client-a", StatusCode::OK),
+    ] {
+        let request = http::Request::get(format!("/v1/usage/receipts/{token}"))
+            .header("authorization", format!("Bearer {caller}"))
+            .body(Body::full(Bytes::new()))
+            .unwrap();
+        let response = app.router().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let receipt: Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), 65536)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(receipt["cost_nano_usd"], 633522);
+            assert_eq!(receipt["rate_cards"][0]["model"], "upstream");
+        }
+    }
+    server.abort();
+}

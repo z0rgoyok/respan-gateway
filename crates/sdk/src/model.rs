@@ -56,6 +56,9 @@ pub struct Model {
     /// What it costs, if known.
     #[serde(rename = "pricing", skip_serializing_if = "Option::is_none")]
     pub price: Option<Price>,
+    /// Source, verification date and conditional rates for this model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_card: Option<crate::RateCard>,
     /// When it is retired, if it is to be.
     #[serde(
         skip_serializing_if = "Option::is_none",
@@ -109,6 +112,7 @@ impl Model {
         take(&mut self.context_window, &over.context_window);
         take(&mut self.max_output_tokens, &over.max_output_tokens);
         take(&mut self.price, &over.price);
+        take(&mut self.rate_card, &over.rate_card);
         take(&mut self.retires_at, &over.retires_at);
         if !over.input_modalities.is_empty() {
             self.input_modalities.clone_from(&over.input_modalities);
