@@ -17,7 +17,7 @@ mod price;
 
 pub use catalog::Catalog;
 pub use model::{Capability, Modality, Model, time};
-pub use price::Price;
+pub use price::{LongContext, OffPeak, Price, RateCard, ScheduledPrice};
 
 /// A request to route: what a router knows of it, and a provider's
 /// [`FormatFor`] reads.

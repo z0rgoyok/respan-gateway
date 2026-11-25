@@ -460,6 +460,9 @@ fn usage_of(u: &Value) -> Result<Usage, Fault> {
     let mut usage = Usage::new(n("/prompt_tokens")?, n("/completion_tokens")?);
     usage.cached_input_tokens = n("/prompt_tokens_details/cached_tokens")?;
     usage.cache_write_input_tokens = n("/prompt_tokens_details/cache_write_tokens")?;
+    usage.audio_input_tokens = n("/prompt_tokens_details/audio_tokens")?;
+    usage.cached_audio_input_tokens = n("/prompt_tokens_details/cached_audio_tokens")?;
+    usage.image_output_tokens = n("/completion_tokens_details/image_tokens")?;
     usage.reasoning_tokens = n("/completion_tokens_details/reasoning_tokens")?;
     Ok(parts_within_totals(usage))
 }

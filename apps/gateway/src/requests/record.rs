@@ -31,6 +31,9 @@ pub struct RequestRecord {
     /// price for its model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Distinct upstream rate cards applied, bounded per request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rate_cards: Vec<serde_json::Value>,
     /// The calls to the model the tool loop made for it and the tools it
     /// ran, in order; none without the loop.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

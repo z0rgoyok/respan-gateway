@@ -513,6 +513,16 @@ pub fn usage_body(u: &Usage, native: &Map<String, Value>) -> Option<Value> {
     Some(body)
 }
 
+fn modality_count(u: &Value, field: &str, modality: &str) -> u64 {
+    u[field]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|v| v["modality"] == modality)
+        .filter_map(|v| v["tokenCount"].as_u64())
+        .fold(0, u64::saturating_add)
+}
+
 /// Usage totals of a `usageMetadata`; the thoughts are part of the output.
 pub fn usage_of(u: &Value) -> Result<Usage, Fault> {
     let n = |key: &str| count(u.get(key));
@@ -524,6 +534,9 @@ pub fn usage_of(u: &Value) -> Result<Usage, Fault> {
             .unwrap_or(0)
             .saturating_add(thoughts),
         cached_input_tokens: n("cachedContentTokenCount")?.unwrap_or(0),
+        audio_input_tokens: modality_count(u, "promptTokensDetails", "AUDIO"),
+        cached_audio_input_tokens: modality_count(u, "cacheTokensDetails", "AUDIO"),
+        image_output_tokens: modality_count(u, "candidatesTokensDetails", "IMAGE"),
         reasoning_tokens: thoughts,
         ..Usage::default()
     })

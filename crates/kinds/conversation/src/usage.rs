@@ -13,6 +13,12 @@ pub struct Usage {
     pub cached_input_tokens: u64,
     /// Of `input_tokens`, those written to a cache.
     pub cache_write_input_tokens: u64,
+    /// Of the input, reported audio tokens.
+    pub audio_input_tokens: u64,
+    /// Cached audio tokens, part of both audio and cached input.
+    pub cached_audio_input_tokens: u64,
+    /// Image tokens within total output.
+    pub image_output_tokens: u64,
     /// Of `output_tokens`, those spent on reasoning.
     pub reasoning_tokens: u64,
 }
@@ -47,6 +53,12 @@ impl Usage {
                 self.cache_write_input_tokens,
                 other.cache_write_input_tokens,
             ),
+            audio_input_tokens: f(self.audio_input_tokens, other.audio_input_tokens),
+            cached_audio_input_tokens: f(
+                self.cached_audio_input_tokens,
+                other.cached_audio_input_tokens,
+            ),
+            image_output_tokens: f(self.image_output_tokens, other.image_output_tokens),
             reasoning_tokens: f(self.reasoning_tokens, other.reasoning_tokens),
         }
     }
