@@ -188,11 +188,21 @@ impl Models {
                 "route": { "pick": rule.pick.name(), "to": to },
             });
             let mut rates = serde_json::Map::new();
+            let mut input_modalities = None;
             for target in &rule.to {
-                let Some(id) = target.model_for(Some(&rule.name)) else {
-                    continue;
-                };
-                if let Some(model) = self.routes.catalog().get(&target.provider, &id)
+                let model = target
+                    .model_for(Some(&rule.name))
+                    .and_then(|id| self.routes.catalog().get(&target.provider, &id));
+                // A public route can change targets between requests. An unknown target
+                // provides no evidence that a modality works across the whole route.
+                let target_modalities = model
+                    .as_ref()
+                    .map(|model| model.input_modalities.as_slice())
+                    .unwrap_or_default();
+                input_modalities
+                    .get_or_insert_with(|| target_modalities.to_vec())
+                    .retain(|modality| target_modalities.contains(modality));
+                if let Some(model) = model
                     && let Some(price) = model.price
                 {
                     rates.insert(
@@ -200,6 +210,11 @@ impl Models {
                         json!({"pricing":price, "rate_card":model.rate_card}),
                     );
                 }
+            }
+            if let Some(modalities) = input_modalities
+                && !modalities.is_empty()
+            {
+                card["input_modalities"] = json!(modalities);
             }
             if !rates.is_empty() {
                 card["pricing_unit"] = "USD_per_million_tokens".into();
@@ -539,6 +554,51 @@ mod tests {
         let card = models.routes().next().unwrap();
         assert_eq!(card["pricing"]["cached_input"], 0.1);
         assert!(card["route"].get("pricing_by_target").is_none());
+    }
+
+    #[test]
+    fn a_route_lists_only_input_modalities_shared_by_all_targets() {
+        use respan_gateway_sdk::Modality::{Audio, Image};
+
+        let routes = Routes::new().rule(Rule::new(
+            "vision",
+            vec![
+                Candidate::parse("primary/model"),
+                Candidate::parse("backup/model"),
+            ],
+        ));
+        let models = Models::new(&[], Arc::new(routes), PublicModels::Routes);
+        let set = |provider, input_modalities| {
+            let mut model = Model::new("model");
+            model.input_modalities = input_modalities;
+            models.routes.catalog().set(provider, [model].into_iter());
+        };
+
+        set("primary", vec![Image, Audio]);
+        assert!(
+            models
+                .routes()
+                .next()
+                .unwrap()
+                .get("input_modalities")
+                .is_none()
+        );
+
+        set("backup", vec![Image]);
+        assert_eq!(
+            models.routes().next().unwrap()["input_modalities"],
+            json!(["image"])
+        );
+
+        set("backup", vec![]);
+        assert!(
+            models
+                .routes()
+                .next()
+                .unwrap()
+                .get("input_modalities")
+                .is_none()
+        );
     }
 
     #[test]
